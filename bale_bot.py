@@ -5,9 +5,11 @@ import csv
 import matplotlib.pyplot as plt
 import time
 import requests
-
+import os
+from dotenv import load_dotenv
 # ----- توکن و URL API بله -----
-BOT_TOKEN = "1214743869:HVosoVwMIVkUtkv3gXHENWnPbZWdxEwR7X4"
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 BASE_URL = f"https://tapi.bale.ai/bot{BOT_TOKEN}"
 
 # ----- اتصال دیتابیس -----
@@ -25,8 +27,10 @@ cur.execute('''CREATE TABLE IF NOT EXISTS appointments (
     followup_sent INTEGER DEFAULT 0
 )''')
 conn.commit()
-# cur.execute("UPDATE appointments SET followup_waiting=0")
-# conn.commit()
+cur.execute("ALTER TABLE appointments ADD COLUMN followup_waiting INTEGER DEFAULT 0")
+conn.commit()
+
+
 # ----- شناسه‌های مجاز منشی/دکتر -----
 AUTHORIZED_USERS = [1984139551, 987654321]  # chat_id دکتر و منشی
 
