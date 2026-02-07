@@ -7,6 +7,8 @@ import time
 import requests
 import os
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
+
 # ----- توکن و URL API بله -----
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -27,8 +29,8 @@ cur.execute('''CREATE TABLE IF NOT EXISTS appointments (
     followup_sent INTEGER DEFAULT 0
 )''')
 conn.commit()
-cur.execute("ALTER TABLE appointments ADD COLUMN followup_waiting INTEGER DEFAULT 0")
-conn.commit()
+# cur.execute("ALTER TABLE appointments ADD COLUMN phone TEXT")
+# conn.commit()
 
 
 # ----- شناسه‌های مجاز منشی/دکتر -----
@@ -46,20 +48,27 @@ def send_message(chat_id, text):
         print("❌ ارسال پیام به بله موفق نبود:", res.text)
 
 # ----- ثبت نوبت توسط منشی -----
-def add_appointment(name, date_, hour_, patient_chat_id, user_chat_id):
+def add_appointment(name, phone, date_, hour_, patient_chat_id, user_chat_id):
     if user_chat_id not in AUTHORIZED_USERS:
         send_message(user_chat_id, "❌ شما اجازه ثبت نوبت را ندارید.")
         return
+
+    # چک ساعت خالی
     cur.execute("SELECT * FROM appointments WHERE date=? AND time=?", (date_, hour_))
     if cur.fetchone():
         send_message(user_chat_id, "❌ این ساعت قبلاً رزرو شده است.")
         return
-    cur.execute("INSERT INTO appointments (name, date, time, chat_id) VALUES (?, ?, ?, ?)",
-                (name, date_, hour_, patient_chat_id))
-    conn.commit()
-    send_message(user_chat_id, f"نوبت {name} برای {date_} ساعت {hour_} ثبت شد ✅")
-    send_message(patient_chat_id, f"سلام {name}، نوبت شما برای {date_} ساعت {hour_} ثبت شد ✅")
 
+    # ثبت نوبت
+    cur.execute("""
+        INSERT INTO appointments (name, phone, date, time, chat_id)
+        VALUES (?, ?, ?, ?, ?)
+    """, (name, phone, date_, hour_, patient_chat_id))
+    conn.commit()
+
+    # پیام به منشی و بیمار
+    send_message(user_chat_id, f"نوبت {name} ({phone}) برای {date_} ساعت {hour_} ثبت شد ✅")
+    send_message(patient_chat_id, f"سلام {name}، نوبت شما برای {date_} ساعت {hour_} ثبت شد ✅")
 # ----- رزرو خودکار بیمار -----
 ALL_HOURS = ["10:00","11:00","13:00","14:00","15:00","16:00"]
 
@@ -76,6 +85,14 @@ def book_day(patient_chat_id, date_):
     send_message(patient_chat_id, f"ساعت‌های خالی برای {date_}:\n" + ", ".join(free_hours))
 
 def book_time(patient_chat_id, date_, hour_):
+    # چک 48 ساعت قبل
+    now = datetime.now()
+    ap_datetime = datetime.strptime(f"{date_} {hour_}", "%Y-%m-%d %H:%M")
+    if ap_datetime < now + timedelta(hours=48):
+        send_message(patient_chat_id, "❌ می‌توانید تنها از ۴۸ ساعت آینده به بعد وقت بگیرید.")
+        return
+
+    # چک ساعت خالی
     free_hours = get_free_hours(date_)
     if hour_ not in free_hours:
         send_message(patient_chat_id, "❌ این ساعت قبلاً رزرو شده یا موجود نیست.")
@@ -87,6 +104,7 @@ def book_time(patient_chat_id, date_, hour_):
     )
     conn.commit()
     send_message(patient_chat_id, f"✅ نوبت شما برای {date_} ساعت {hour_} ثبت شد")
+
 
 
 
@@ -268,16 +286,18 @@ def list_patients(user_chat_id):
     if user_chat_id not in AUTHORIZED_USERS:
         send_message(user_chat_id, "❌ شما اجازه مشاهده بیماران را ندارید.")
         return
-    cur.execute("SELECT name, chat_id FROM appointments GROUP BY chat_id, name")
+
+    cur.execute("SELECT name, phone, chat_id, date, time FROM appointments ORDER BY date, time")
     rows = cur.fetchall()
     if not rows:
         send_message(user_chat_id, "❌ هیچ بیمار ثبت شده‌ای وجود ندارد.")
         return
-    msg = "📋 لیست بیماران و chat_id:\n"
-    for name, chat_id in rows:
-        msg += f"{name} : {chat_id}\n"
-    send_message(user_chat_id, msg)
 
+    msg = "📋 لیست بیماران و chat_id و شماره:\n"
+    for name, phone, chat_id, date_, time_ in rows:
+        msg += f"{name} ({phone}) : {chat_id} — {date_} ساعت {time_}\n"
+
+    send_message(user_chat_id, msg)
 # ----- یادآوری و پیگیری خودکار -----
 def auto_reminders():
     now = datetime.now()
@@ -295,7 +315,12 @@ def auto_reminders():
     for ap_id, name, date_, hour_, chat_id, followup_sent in cur.fetchall():
         ap_datetime = datetime.strptime(f"{date_} {hour_}", "%Y-%m-%d %H:%M")
         if now >= ap_datetime + timedelta(hours=1):
-            send_message(chat_id, f"سلام {name}، وضعیت دندان شما بعد از درمان چطور است؟ 🙂")
+            send_message(
+                chat_id,
+                f"سلام {name} 🙂\n"
+                "وضعیت دندون شما بعد از درمان چطوره؟\n\n"
+                "لطفاً در انتهای پیام، نام خانوادگی و شماره تماس‌تون رو هم بنویسید 🙏"
+            )
             cur.execute("UPDATE appointments SET followup_sent=1, followup_waiting=1 WHERE id=?", (ap_id,))
             conn.commit()
             
